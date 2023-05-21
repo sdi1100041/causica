@@ -106,6 +106,7 @@ def run_experiment(
         override_objective_path=objective_config_path,
         default_configs_dir=default_configs_dir,
     )
+    train_hypers['dataset_name']=dataset_name
     if random_seed is not None:
         model_config["random_seed"] = random_seed
     # Change active learning method if imputation_method is not none and all methods are run

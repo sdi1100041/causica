@@ -8,6 +8,7 @@ import networkx as nx
 import numpy as np
 import scipy
 import torch
+import wandb
 from torch import nn
 from torch.utils.data import DataLoader
 
@@ -27,7 +28,33 @@ from .base_distributions import TemporalConditionalSplineFlow
 from .deci import DECI
 from .generation_functions import TemporalContractiveInvertibleGNN
 from .variational_distributions import AdjMatrix, TemporalThreeWayGrahpDist
+import numpy as np
+import torch
+from sklearn.metrics import roc_auc_score
 
+def load_groundtruth(path):
+    # Load the TSV file
+    with open(path, 'r') as f:
+        lines = f.readlines()
+
+    # Initialize a 100x100 torch tensor with zeros
+    adjacency_matrix = torch.zeros((100, 100),dtype=torch.int32)
+
+    # Iterate through the rows of the file
+    for line in lines:
+        # Split the line into columns
+        columns = line.strip().split('\t')
+
+        # Extract the vertex indices and edge weight
+        src_vertex = int(columns[0][1:]) - 1  # Remove the 'G' prefix and subtract 1 for zero-based indexing
+        dst_vertex = int(columns[1][1:]) - 1  # Remove the 'G' prefix and subtract 1 for zero-based indexing
+        weight = int(columns[2])
+
+        # Update the adjacency matrix
+        adjacency_matrix[src_vertex, dst_vertex] = weight
+
+    print("Adjacency matrix shape:", adjacency_matrix.shape)
+    return adjacency_matrix
 
 class Rhino(DECI, IModelForTimeseries):
     """
@@ -997,8 +1024,28 @@ class Rhino(DECI, IModelForTimeseries):
             train_config_dict=train_config_dict,
             report_progress_callback=report_progress_callback,
         )
+        (dataset_name,N)=train_config_dict['dataset_name'].split('_')
+        N=int(N)
         # Save the sampled adjacency matrix
-        sampled_probable_adjacency = self.get_adj_matrix(do_round=True, samples=1, most_likely_graph=True, squeeze=True)
+        sampled_probable_adjacency = self.get_adj_matrix(do_round=False, most_likely_graph=True, samples=1)
+        
+        predicted_prob=sampled_probable_adjacency[0].max(axis=0)
+        groundtruth=load_groundtruth('./data/DREAM3GoldStandard_InSilicoSize100_'+dataset_name+'.txt')
+        
+        predicted_pvalue,all_labels=[],[]
+        for i in range(100):
+            for j in range(100):
+                if i==j:
+                    continue
+                predicted_pvalue.append(predicted_prob[i][j].item())
+                all_labels.append(groundtruth[i][j].item())
+        
+        auroc = roc_auc_score(all_labels,predicted_pvalue)
+        print("AUROC:", auroc)
+        run = wandb.init(project='Dream3_experiments',name='RHINO_'+dataset_name+'_'+str(N),config={'algorithm':'RHINO','N':N,'task':dataset_name})
+        wandb.log({'AUROC':auroc})
+        run.finish()
+        #sampled_probable_adjacency = self.get_adj_matrix(do_round=True, samples=1, most_likely_graph=True, squeeze=True)
         np.save(
             os.path.join(self.save_dir, self._saved_most_likely_adjacency_file),
             sampled_probable_adjacency,
